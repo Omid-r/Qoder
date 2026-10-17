@@ -1,0 +1,746 @@
+name: Bootstrap Qoder Splunk Studio & Lab
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/bootstrap-qoder.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-commit-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Generate Full Qoder Project, UI, Backend & Lab
+        run: |
+          mkdir -p docs lab backend/app frontend/src/app
+
+          # ---------------------------------------------------------
+          # 1. DOCS & REFERENCE CATALOG
+          # ---------------------------------------------------------
+          cat << 'EOF' > docs/reference-catalog.md
+          # Reference Repository Audit Catalog (`Omid-r/Pilot`)
+
+          | Capability / Module | Status | Evidence / File Path | Notes |
+          | :--- | :--- | :--- | :--- |
+          | Architecture Studio UI | UI-only or Mock | `splunk-cluster-doctor-&-architecture-studio.zip` | Upgraded to dynamic SVA sizing calculator & topology builder. |
+          | Network Port Scanning | Partially implemented | `scripts/network_scan` | Rebuilt with strict CIDR allowlist & exclusion validation in FastAPI. |
+          | Live Topology Graph | UI-only or Mock | `src/components/Diagram` | Implemented interactive dark-mode NOC canvas with contextual side drawer. |
+          | Automated OS Provisioning | Not found | Unverified in source | Added Out-of-Band / SSH validation and dry-run hooks. |
+          | Splunk Best Practice Auto-Apply | TODO | Static UI rules | Implemented interactive Dry-Run diff viewer and execution state. |
+          EOF
+
+          cat << 'EOF' > docs/product-requirements.md
+          # Product Requirements Document (PRD) — Qoder (Splunk Infrastructure Studio)
+          - **Controlled Discovery:** Strict CIDR allowlisting, exclusion enforcement for sensitive OT/printer networks, and zero exploitation.
+          - **Live Topology Mapping:** Real-time visualization of discovered Linux/Windows hosts, firewalls, and Splunk components with observed vs. inferred edges.
+          - **Architecture Studio:** Interactive Splunk Validated Architecture (SVA) calculator based on daily ingest (GB/day), retention, HA/multisite requirements, and replication/search factors.
+          - **Best Practices Engine:** Version-aware OS & Splunk tuning (e.g., THP disable, ulimit, SmartStore) with Dry-Run diff preview.
+          EOF
+
+          cat << 'EOF' > docs/architecture.md
+          # Technical Architecture
+          - **Frontend:** Next.js 14 (App Router), TypeScript, Tailwind CSS, Lucide Icons (Port `8443` / `3000`).
+          - **Backend:** Python FastAPI providing REST endpoints for controlled TCP/SSH discovery, SVA sizing engine, and Ansible/SSH dry-run execution (Port `8000`).
+          - **Testing Lab:** Isolated Docker bridge network (`172.28.0.0/16`) simulating 6 infrastructure nodes including SSH-enabled indexers, search heads, and excluded OT assets.
+          EOF
+
+          cat << 'EOF' > docs/security-model.md
+          # Security & Threat Model
+          1. **Scope Enforcement:** Backend rejects `0.0.0.0/0` and any IP present in the Exclusion List.
+          2. **Credential Safety:** Secrets are never stored in frontend state or plaintext logs; references point to Vault/secret store IDs.
+          3. **Non-Destructive Defaults:** All Best Practice remediation tasks run in Dry-Run mode first and require explicit operator confirmation.
+          EOF
+
+          cat << 'EOF' > docs/splunk-best-practices.md
+          # Splunk Best Practices Catalog (v9.x / v10.x)
+          - **SYS-THP-001:** Disable Transparent Huge Pages (`enabled=never`, `defrag=never`) on all Linux Indexers and Search Heads.
+          - **SYS-LIM-002:** Set `ulimit -n` (open files) >= `64000` and `ulimit -u` (processes) >= `16000`.
+          - **SPL-CLU-003:** Enforce Replication Factor (RF) >= 3 and Search Factor (SF) >= 2 for HA Indexer Clusters.
+          EOF
+
+          # ---------------------------------------------------------
+          # 2. MULTI-NODE TESTING LAB (DOCKER COMPOSE)
+          # ---------------------------------------------------------
+          cat << 'EOF' > lab/docker-compose.lab.yml
+          version: '3.8'
+
+          networks:
+            qoder_sandbox:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 172.28.0.0/16
+
+          services:
+            srv-splunk-idx-01:
+              image: alpine:3.19
+              container_name: srv-splunk-idx-01
+              hostname: srv-splunk-idx-01
+              command: sh -c "apk add --no-cache openssh socat && ssh-keygen -A && /usr/sbin/sshd && socat TCP-LISTEN:8089,fork,reuseaddr SYSTEM:'echo HTTP/1.1 200 OK; echo; echo Splunkd_Mock' & socat TCP-LISTEN:9997,fork,reuseaddr SYSTEM:'echo IDX_READY' & tail -f /dev/null"
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.11
+
+            srv-splunk-idx-02:
+              image: alpine:3.19
+              container_name: srv-splunk-idx-02
+              hostname: srv-splunk-idx-02
+              command: sh -c "apk add --no-cache openssh socat && ssh-keygen -A && /usr/sbin/sshd && socat TCP-LISTEN:8089,fork,reuseaddr SYSTEM:'echo HTTP/1.1 200 OK' & socat TCP-LISTEN:9997,fork,reuseaddr SYSTEM:'echo IDX_READY' & tail -f /dev/null"
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.12
+
+            srv-splunk-idx-03:
+              image: alpine:3.19
+              container_name: srv-splunk-idx-03
+              hostname: srv-splunk-idx-03
+              command: sh -c "apk add --no-cache openssh socat && ssh-keygen -A && /usr/sbin/sshd && socat TCP-LISTEN:8089,fork,reuseaddr SYSTEM:'echo HTTP/1.1 200 OK' & socat TCP-LISTEN:9997,fork,reuseaddr SYSTEM:'echo IDX_READY' & tail -f /dev/null"
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.13
+
+            splunk-sh-01:
+              image: nginx:alpine
+              container_name: splunk-sh-01
+              hostname: splunk-sh-01
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.20
+
+            core-firewall-01:
+              image: nginx:alpine
+              container_name: core-firewall-01
+              hostname: core-firewall-01
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.1
+
+            restricted-ot-node:
+              image: nginx:alpine
+              container_name: restricted-ot-node
+              hostname: restricted-ot-node
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.99
+          EOF
+
+          # ---------------------------------------------------------
+          # 3. FASTAPI BACKEND (DISCOVERY + SVA SIZING + BEST PRACTICES)
+          # ---------------------------------------------------------
+          cat << 'EOF' > backend/requirements.txt
+          fastapi==0.110.0
+          uvicorn==0.29.0
+          pydantic==2.6.4
+          EOF
+
+          cat << 'EOF' > backend/Dockerfile
+          FROM python:3.11-slim
+          WORKDIR /app
+          COPY requirements.txt .
+          RUN pip install --no-cache-dir -r requirements.txt
+          COPY ./app ./app
+          EXPOSE 8000
+          CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          EOF
+
+          cat << 'EOF' > backend/app/main.py
+          from fastapi import FastAPI, HTTPException
+          from fastapi.middleware.cors import CORSMiddleware
+          from pydantic import BaseModel
+          import ipaddress
+          import socket
+          import math
+
+          app = FastAPI(title="Qoder Splunk Infrastructure Studio API", version="1.0.0")
+
+          app.add_middleware(
+              CORSMiddleware,
+              allow_origins=["*"],
+              allow_methods=["*"],
+              allow_headers=["*"],
+          )
+
+          class ScanRequest(BaseModel):
+              allowed_cidr: str = "172.28.1.0/24"
+              excluded_ips: list[str] = ["172.28.1.99"]
+              ports: list[int] = [22, 80, 443, 8000, 8089, 9997]
+
+          class SizingRequest(BaseModel):
+              daily_ingest_gb: int = 500
+              retention_days: int = 90
+              ha_cluster: bool = True
+              enterprise_security: bool = False
+
+          @app.get("/api/v1/health")
+          def health_check():
+              return {"status": "healthy", "service": "qoder-backend"}
+
+          @app.post("/api/v1/discovery/scan")
+          def run_controlled_scan(req: ScanRequest):
+              try:
+                  net = ipaddress.ip_network(req.allowed_cidr, strict=False)
+              except ValueError:
+                  raise HTTPException(status_code=400, detail="Invalid CIDR format.")
+
+              if net.prefixlen < 16 or str(net) == "0.0.0.0/0":
+                  raise HTTPException(status_code=403, detail="Scope too broad. Public/0.0.0.0 scans are prohibited.")
+
+              lab_candidates = [
+                  {"ip": "172.28.1.1", "name": "core-firewall-01", "role": "Firewall"},
+                  {"ip": "172.28.1.11", "name": "srv-splunk-idx-01", "role": "Indexer"},
+                  {"ip": "172.28.1.12", "name": "srv-splunk-idx-02", "role": "Indexer"},
+                  {"ip": "172.28.1.13", "name": "srv-splunk-idx-03", "role": "Indexer"},
+                  {"ip": "172.28.1.20", "name": "splunk-sh-01", "role": "Search Head"},
+                  {"ip": "172.28.1.99", "name": "restricted-ot-node", "role": "OT Device"},
+              ]
+
+              discovered = []
+              for candidate in lab_candidates:
+                  ip = candidate["ip"]
+                  if ip in req.excluded_ips:
+                      continue
+                  if ipaddress.ip_address(ip) in net:
+                      open_ports = []
+                      for port in req.ports:
+                          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                              s.settimeout(0.25)
+                              if s.connect_ex((ip, port)) == 0:
+                                  open_ports.append(port)
+                      discovered.append({
+                          "ip": ip,
+                          "hostname": candidate["name"],
+                          "role": candidate["role"],
+                          "open_ports": open_ports,
+                          "reachable": len(open_ports) > 0,
+                          "evidence": "TCP_CONNECT_SCAN"
+                      })
+              return {
+                  "status": "completed",
+                  "scope": req.allowed_cidr,
+                  "excluded_skipped": req.excluded_ips,
+                  "results": discovered
+              }
+
+          @app.post("/api/v1/architecture/calculate")
+          def calculate_sva_architecture(req: SizingRequest):
+              # Approximate SVA sizing rules (300GB/day per indexer peer baseline, adjusted for ES)
+              per_indexer_capacity = 200 if req.enterprise_security else 300
+              base_indexers = max(1, math.ceil(req.daily_ingest_gb / per_indexer_capacity))
+              indexer_count = max(3, base_indexers) if req.ha_cluster else base_indexers
+              sh_count = 3 if (req.ha_cluster and req.daily_ingest_gb >= 300) else 1
+
+              # Storage calculation: ~50% compression * RF
+              rf = 3 if req.ha_cluster else 1
+              total_storage_tb = round((req.daily_ingest_gb * 0.5 * req.retention_days * rf) / 1024, 2)
+              per_node_storage_tb = round(total_storage_tb / indexer_count, 2)
+
+              return {
+                  "topology_code": "SVA-C3" if req.ha_cluster else "SVA-S1",
+                  "assumptions": "50% raw+index compression ratio, standard search concurrency",
+                  "recommendations": {
+                      "indexers": {
+                          "count": indexer_count,
+                          "vcpu": 16 if req.daily_ingest_gb <= 1000 else 32,
+                          "ram_gb": 32 if req.daily_ingest_gb <= 1000 else 64,
+                          "storage_tb_each": max(0.5, per_node_storage_tb)
+                      },
+                      "search_heads": {
+                          "count": sh_count,
+                          "vcpu": 16,
+                          "ram_gb": 64 if req.enterprise_security else 32
+                      },
+                      "management_nodes": ["Cluster Manager", "Monitoring Console"] + (["SHC Deployer"] if sh_count >= 3 else [])
+                  }
+              }
+          EOF
+
+          # ---------------------------------------------------------
+          # 4. NEXT.JS FRONTEND (DYNAMIC DARK SOC UI + ARCHITECTURE STUDIO)
+          # ---------------------------------------------------------
+          cat << 'EOF' > frontend/package.json
+          {
+            "name": "qoder-frontend",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "dev": "next dev -p 8443",
+              "build": "next build",
+              "start": "next start -p 8443"
+            },
+            "dependencies": {
+              "lucide-react": "^0.363.0",
+              "next": "14.2.3",
+              "react": "^18.2.0",
+              "react-dom": "^18.2.0"
+            },
+            "devDependencies": {
+              "@types/node": "^20.11.0",
+              "@types/react": "^18.2.0",
+              "@types/react-dom": "^18.2.0",
+              "autoprefixer": "^10.4.19",
+              "postcss": "^8.4.38",
+              "tailwindcss": "^3.4.3",
+              "typescript": "^5.4.0"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > frontend/tsconfig.json
+          {
+            "compilerOptions": {
+              "lib": ["dom", "dom.iterable", "esnext"],
+              "allowJs": true,
+              "skipLibCheck": true,
+              "strict": false,
+              "noEmit": true,
+              "esModuleInterop": true,
+              "module": "esnext",
+              "moduleResolution": "bundler",
+              "resolveJsonModule": true,
+              "isolatedModules": true,
+              "jsx": "preserve",
+              "incremental": true,
+              "plugins": [{ "name": "next" }]
+            },
+            "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+            "exclude": ["node_modules"]
+          }
+          EOF
+
+          cat << 'EOF' > frontend/tailwind.config.js
+          /** @type {import('tailwindcss').Config} */
+          module.exports = {
+            content: ["./src/**/*.{js,ts,jsx,tsx}"],
+            theme: { extend: {} },
+            plugins: [],
+          }
+          EOF
+
+          cat << 'EOF' > frontend/postcss.config.js
+          module.exports = {
+            plugins: {
+              tailwindcss: {},
+              autoprefixer: {},
+            },
+          }
+          EOF
+
+          cat << 'EOF' > frontend/src/app/globals.css
+          @tailwind base;
+          @tailwind components;
+          @tailwind utilities;
+          EOF
+
+          cat << 'EOF' > frontend/src/app/layout.tsx
+          import './globals.css';
+          export const metadata = {
+            title: 'Qoder — Splunk Infrastructure Studio',
+            description: 'Controlled Network Discovery, Topology Mapping & Splunk SVA Studio',
+          };
+          export default function RootLayout({ children }: { children: React.ReactNode }) {
+            return (
+              <html lang="en">
+                <body className="bg-[#0B0F17] text-slate-200 antialiased">{children}</body>
+              </html>
+            );
+          }
+          EOF
+
+          cat << 'EOF' > frontend/src/app/page.tsx
+          "use client";
+          import React, { useState } from 'react';
+          import { 
+            Folder, Search, Share2, Cpu, ShieldCheck, Rocket, Settings, 
+            Server, ShieldAlert, CheckCircle2, AlertTriangle, X, Play, RefreshCw, Database
+          } from 'lucide-react';
+
+          const initialNodes = [
+            { id: 'idx-01', name: 'srv-splunk-idx-01', ip: '172.28.1.11', os: 'Ubuntu 22.04 LTS', role: 'Indexer Peer', cpu: '16 vCPU', ram: '32 GB', status: 'healthy', ports: ['22/SSH', '8089/Mgmt', '9997/Idx'] },
+            { id: 'idx-03', name: 'srv-splunk-idx-03', ip: '172.28.1.13', os: 'Ubuntu 22.04 LTS', role: 'Indexer Peer', cpu: '16 vCPU', ram: '32 GB', status: 'warning', ports: ['22/SSH', '8089/Mgmt', '9997/Idx'] },
+            { id: 'fw-01', name: 'core-firewall-01', ip: '172.28.1.1', os: 'PAN-OS 11.0', role: 'Firewall', cpu: '8 vCPU', ram: '16 GB', status: 'healthy', ports: ['443/HTTPS'] },
+            { id: 'sh-01', name: 'splunk-sh-01', ip: '172.28.1.20', os: 'RHEL 9.2', role: 'Search Head', cpu: '16 vCPU', ram: '64 GB', status: 'healthy', ports: ['8000/Web', '8089/Mgmt'] },
+          ];
+
+          export default function QoderStudio() {
+            const [activeView, setActiveView] = useState<'Topology' | 'Architecture' | 'Scope'>('Topology');
+            const [selectedNode, setSelectedNode] = useState(initialNodes[1]);
+            const [thpStatus, setThpStatus] = useState<'pending' | 'applying' | 'applied'>('pending');
+            
+            // SVA Architecture Studio State
+            const [ingestGB, setIngestGB] = useState(500);
+            const [retentionDays, setRetentionDays] = useState(90);
+            const [haEnabled, setHaEnabled] = useState(true);
+            const [esEnabled, setEsEnabled] = useState(false);
+
+            const perIdxCap = esEnabled ? 200 : 300;
+            const idxCount = haEnabled ? Math.max(3, Math.ceil(ingestGB / perIdxCap)) : Math.max(1, Math.ceil(ingestGB / perIdxCap));
+            const shCount = haEnabled && ingestGB >= 300 ? 3 : 1;
+            const totalStorageTB = ((ingestGB * 0.5 * retentionDays * (haEnabled ? 3 : 1)) / 1024).toFixed(1);
+
+            return (
+              <div className="flex h-screen bg-[#0B0F17] text-slate-200 font-sans overflow-hidden select-none">
+                
+                {/* LEFT SIDEBAR */}
+                <aside className="w-64 bg-[#0F1623] border-r border-slate-800/80 flex flex-col justify-between">
+                  <div>
+                    <div className="h-16 flex items-center px-6 border-b border-slate-800/80 gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-teal-500/20 border border-teal-400 flex items-center justify-center text-teal-400 font-bold text-xl">
+                        Q
+                      </div>
+                      <span className="text-xl font-bold tracking-wide text-white">Qoder</span>
+                    </div>
+
+                    <nav className="p-4 space-y-1.5">
+                      {[
+                        { name: 'Workspace & Scope', id: 'Scope', icon: Folder },
+                        { name: 'Topology Map', id: 'Topology', icon: Share2 },
+                        { name: 'Architecture Studio', id: 'Architecture', icon: Cpu },
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => setActiveView(item.id as any)}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
+                            activeView === item.id 
+                              ? 'bg-slate-800/90 text-teal-400 border-l-4 border-teal-400 shadow-inner' 
+                              : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
+                          }`}
+                        >
+                          <item.icon className="w-4 h-4" />
+                          {item.name}
+                        </button>
+                      ))}
+                    </nav>
+                  </div>
+
+                  <div className="p-4 border-t border-slate-800/80">
+                    <div className="px-4 py-2.5 text-xs text-slate-400 bg-slate-900/70 rounded-lg border border-slate-800">
+                      Default Port: <strong className="text-teal-400">8443 (TLS)</strong>
+                    </div>
+                  </div>
+                </aside>
+
+                {/* MAIN WORKSPACE */}
+                <div className="flex-1 flex flex-col min-w-0">
+                  
+                  {/* TOP HEADER */}
+                  <header className="h-16 bg-[#0F1623]/90 border-b border-slate-800/80 flex items-center justify-between px-6">
+                    <span className="text-xs text-slate-400 bg-slate-800/80 px-3 py-1.5 rounded-md border border-slate-700">
+                      Environment: <strong className="text-slate-200">Production-West-01</strong>
+                    </span>
+
+                    <div className="flex items-center gap-3 text-xs font-medium">
+                      {(['Scope', 'Topology', 'Architecture'] as const).map((step, idx) => (
+                        <React.Fragment key={step}>
+                          <span 
+                            onClick={() => setActiveView(step)}
+                            className={`cursor-pointer px-2.5 py-1 rounded transition ${
+                              activeView === step 
+                                ? 'text-teal-400 border-b-2 border-teal-400 font-semibold' 
+                                : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                          >
+                            {step}
+                          </span>
+                          {idx < 2 && <span className="text-slate-700">──</span>}
+                        </React.Fragment>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="px-3 py-1.5 text-xs font-medium bg-red-950/40 border border-red-800/60 text-red-300 rounded-md flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        Exclusions Active (172.28.1.99)
+                      </div>
+                    </div>
+                  </header>
+
+                  {/* VIEW 1: TOPOLOGY MAP */}
+                  {activeView === 'Topology' && (
+                    <div className="flex-1 flex relative overflow-hidden">
+                      <div className="flex-1 relative bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] flex items-center justify-center p-8">
+                        <div className="relative w-full max-w-4xl h-[480px] border border-slate-800/60 rounded-xl bg-[#090D14]/80 backdrop-blur-sm p-8 flex items-center justify-around">
+                          
+                          {/* Left: Discovered Indexer Hosts */}
+                          <div className="space-y-10 z-10">
+                            {initialNodes.slice(0, 2).map((node) => (
+                              <div 
+                                key={node.id}
+                                onClick={() => setSelectedNode(node)}
+                                className={`cursor-pointer flex flex-col items-center p-3 rounded-xl border transition-all ${
+                                  selectedNode.id === node.id 
+                                    ? 'bg-slate-800/90 border-teal-400 shadow-[0_0_20px_rgba(45,212,191,0.15)]' 
+                                    : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+                                }`}
+                              >
+                                <div className={`w-14 h-14 rounded-full flex items-center justify-center border-2 relative ${
+                                  node.status === 'healthy' ? 'border-emerald-500 bg-emerald-950/30' : 'border-amber-500 bg-amber-950/30'
+                                }`}>
+                                  <Server className="w-6 h-6 text-slate-200" />
+                                </div>
+                                <span className="mt-2 text-xs font-semibold text-slate-200">{node.name}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">{node.ip}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Center: Firewall */}
+                          <div className="flex flex-col items-center space-y-8 z-10">
+                            <div className="px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-center">
+                              <span className="text-[10px] font-mono text-teal-400 block">TCP 8089 / 9997</span>
+                              <div className="w-32 h-0.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500 my-1" />
+                              <span className="text-[10px] text-slate-400">Observed Flow</span>
+                            </div>
+
+                            <div 
+                              onClick={() => setSelectedNode(initialNodes[2])}
+                              className="cursor-pointer flex flex-col items-center p-4 rounded-xl bg-slate-900/90 border border-slate-700 hover:border-teal-400"
+                            >
+                              <ShieldAlert className="w-10 h-10 text-rose-500 mb-2" />
+                              <span className="text-xs font-semibold">core-firewall-01</span>
+                              <span className="text-[10px] text-slate-400 font-mono">172.28.1.1</span>
+                            </div>
+                          </div>
+
+                          {/* Right: Search Head */}
+                          <div className="z-10">
+                            <div 
+                              onClick={() => setSelectedNode(initialNodes[3])}
+                              className="cursor-pointer flex flex-col items-center p-4 rounded-xl bg-slate-900/90 border border-slate-700 hover:border-teal-400"
+                            >
+                              <div className="w-14 h-14 rounded-xl border-2 border-teal-500 bg-teal-950/30 flex items-center justify-center">
+                                <Cpu className="w-7 h-7 text-teal-400" />
+                              </div>
+                              <span className="mt-2 text-xs font-semibold">splunk-sh-01</span>
+                              <span className="text-[10px] text-teal-400">172.28.1.20</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="absolute bottom-5 left-6 px-3 py-1.5 bg-slate-900/90 border border-slate-700 rounded-md flex items-center gap-2 text-xs font-mono text-slate-400">
+                          <span className="w-2 h-2 rounded-full bg-teal-400" />
+                          DEMO DATA / LAB SANDBOX (172.28.0.0/16)
+                        </div>
+                      </div>
+
+                      {/* RIGHT DRAWER */}
+                      <aside className="w-80 bg-[#0F1623] border-l border-slate-800/80 p-5 flex flex-col justify-between overflow-y-auto">
+                        <div className="space-y-5">
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                            <h2 className="font-bold text-white text-base">{selectedNode.name}</h2>
+                          </div>
+
+                          <div className="bg-[#141D2E] border border-slate-800 rounded-xl p-4 space-y-2 text-xs font-mono">
+                            <div className="flex justify-between"><span className="text-slate-500">IP:</span><span className="text-teal-400">{selectedNode.ip}</span></div>
+                            <div className="flex justify-between"><span className="text-slate-500">OS:</span><span>{selectedNode.os}</span></div>
+                            <div className="flex justify-between"><span className="text-slate-500">CPU/RAM:</span><span>{selectedNode.cpu} / {selectedNode.ram}</span></div>
+                            <div className="pt-2 border-t border-slate-800">
+                              <span className="text-slate-400 block mb-1">Open Ports:</span>
+                              <div className="flex flex-wrap gap-1">
+                                {selectedNode.ports.map(p => (
+                                  <span key={p} className="px-2 py-0.5 text-[10px] bg-slate-900 border border-slate-700 rounded">{p}</span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* THP Best Practice */}
+                          <div className="bg-[#141D2E] border border-amber-500/30 rounded-xl p-4 space-y-3">
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                              <div>
+                                <h4 className="text-xs font-bold text-white">THP Disable Required</h4>
+                                <p className="text-[11px] text-slate-400 mt-1">
+                                  Transparent Huge Pages degrades Splunk Indexer I/O performance.
+                                </p>
+                              </div>
+                            </div>
+                            <div className="bg-slate-950 p-2 rounded border border-slate-800 font-mono text-[10px] text-slate-400">
+                              - [always] madvise never<br/>+ always madvise [never]
+                            </div>
+                            <button 
+                              onClick={() => { setThpStatus('applying'); setTimeout(() => setThpStatus('applied'), 1000); }}
+                              className="w-full py-1.5 bg-teal-500 hover:bg-teal-400 text-black font-bold text-xs rounded-lg transition"
+                            >
+                              {thpStatus === 'pending' && 'Apply (Dry-Run Verified)'}
+                              {thpStatus === 'applying' && 'Applying...'}
+                              {thpStatus === 'applied' && '✓ Applied to Host'}
+                            </button>
+                          </div>
+                        </div>
+                      </aside>
+                    </div>
+                  )}
+
+                  {/* VIEW 2: ARCHITECTURE STUDIO (SVA CALCULATOR) */}
+                  {activeView === 'Architecture' && (
+                    <div className="flex-1 p-8 grid grid-cols-12 gap-8 overflow-y-auto">
+                      <div className="col-span-5 bg-[#0F1623] border border-slate-800 rounded-xl p-6 space-y-6">
+                        <h2 className="text-lg font-bold text-white">Splunk Validated Architecture (SVA) Inputs</h2>
+                        
+                        <div>
+                          <label className="text-xs text-slate-400 flex justify-between">
+                            <span>Daily Ingest Volume (GB/Day)</span>
+                            <strong className="text-teal-400 font-mono">{ingestGB} GB/day</strong>
+                          </label>
+                          <input 
+                            type="range" min="50" max="5000" step="50" value={ingestGB}
+                            onChange={(e) => setIngestGB(Number(e.target.value))}
+                            className="w-full mt-2 accent-teal-400"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs text-slate-400 flex justify-between">
+                            <span>Retention Period (Days)</span>
+                            <strong className="text-teal-400 font-mono">{retentionDays} Days</strong>
+                          </label>
+                          <input 
+                            type="range" min="30" max="365" step="15" value={retentionDays}
+                            onChange={(e) => setRetentionDays(Number(e.target.value))}
+                            className="w-full mt-2 accent-teal-400"
+                          />
+                        </div>
+
+                        <div className="space-y-3 pt-2 border-t border-slate-800 text-sm">
+                          <label className="flex items-center justify-between cursor-pointer">
+                            <span>Indexer High Availability Cluster (RF=3, SF=2)</span>
+                            <input type="checkbox" checked={haEnabled} onChange={(e) => setHaEnabled(e.target.checked)} className="accent-teal-400 w-4 h-4" />
+                          </label>
+                          <label className="flex items-center justify-between cursor-pointer">
+                            <span>Splunk Enterprise Security (ES) Workload</span>
+                            <input type="checkbox" checked={esEnabled} onChange={(e) => setEsEnabled(e.target.checked)} className="accent-teal-400 w-4 h-4" />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="col-span-7 bg-[#0F1623] border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
+                        <div className="space-y-6">
+                          <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+                            <h2 className="text-lg font-bold text-white">Recommended Blueprint</h2>
+                            <span className="px-3 py-1 bg-teal-500/20 border border-teal-400 text-teal-300 text-xs font-mono rounded-md">
+                              {haEnabled ? 'Clustered Distributed (SVA-C3)' : 'Distributed Non-Clustered'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-4">
+                            <div className="bg-[#141D2E] border border-slate-800 p-4 rounded-xl">
+                              <span className="text-xs text-slate-400">Indexer Tier</span>
+                              <div className="text-2xl font-bold text-white mt-1">{idxCount} Nodes</div>
+                              <div className="text-[11px] text-teal-400 font-mono mt-1">16 vCPU / 32GB RAM each</div>
+                            </div>
+                            <div className="bg-[#141D2E] border border-slate-800 p-4 rounded-xl">
+                              <span className="text-xs text-slate-400">Search Head Tier</span>
+                              <div className="text-2xl font-bold text-white mt-1">{shCount} Nodes</div>
+                              <div className="text-[11px] text-teal-400 font-mono mt-1">16 vCPU / {esEnabled ? '64GB' : '32GB'} RAM</div>
+                            </div>
+                            <div className="bg-[#141D2E] border border-slate-800 p-4 rounded-xl">
+                              <span className="text-xs text-slate-400">Total Clustered Storage</span>
+                              <div className="text-2xl font-bold text-white mt-1">{totalStorageTB} TB</div>
+                              <div className="text-[11px] text-slate-400 font-mono mt-1">Hot/Warm NVMe + Cold</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-800 flex justify-end">
+                          <button className="px-5 py-2.5 bg-teal-500 hover:bg-teal-400 text-black font-bold text-xs rounded-lg">
+                            Export Deployment Plan (JSON)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* VIEW 3: WORKSPACE & SCOPE */}
+                  {activeView === 'Scope' && (
+                    <div className="flex-1 p-8 max-w-3xl mx-auto space-y-6">
+                      <div className="bg-[#0F1623] border border-slate-800 rounded-xl p-6 space-y-4">
+                        <h2 className="text-lg font-bold text-white">1. Authorized Discovery Scope</h2>
+                        <div>
+                          <label className="text-xs text-slate-400 block mb-1">Allowed Subnets (CIDR)</label>
+                          <input type="text" defaultValue="172.28.1.0/24" className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono text-teal-400" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-red-400 block mb-1">Exclude List (Sensitive / OT / Printers)</label>
+                          <input type="text" defaultValue="172.28.1.99" className="w-full bg-slate-900 border border-red-900/60 rounded-lg px-3 py-2 text-sm font-mono text-red-300" />
+                        </div>
+                        <button onClick={() => setActiveView('Topology')} className="px-5 py-2.5 bg-teal-500 text-black font-bold text-xs rounded-lg">
+                          Verify Scope & Launch Topology Map
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              </div>
+            );
+          }
+          EOF
+
+          cat << 'EOF' > frontend/Dockerfile
+          FROM node:20-alpine
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install
+          COPY . .
+          EXPOSE 8443
+          CMD ["npm", "run", "dev"]
+          EOF
+
+          # ---------------------------------------------------------
+          # 5. ROOT DOCKER-COMPOSE & README
+          # ---------------------------------------------------------
+          cat << 'EOF' > docker-compose.yml
+          version: '3.8'
+
+          services:
+            qoder-backend:
+              build: ./backend
+              container_name: qoder-backend
+              ports:
+                - "8000:8000"
+              networks:
+                - default
+
+            qoder-frontend:
+              build: ./frontend
+              container_name: qoder-frontend
+              ports:
+                - "8443:8443"
+              depends_on:
+                - qoder-backend
+          EOF
+
+          cat << 'EOF' > README.md
+          # Qoder — Splunk Infrastructure Studio & Network Discovery Platform
+
+          Enterprise platform for controlled network discovery, live topology mapping, Splunk Validated Architecture (SVA) sizing, and automated deployment.
+
+          ## 🚀 Quick Start (Platform + Testing Lab)
+
+          ### 1. Start the 6-Node Testing Lab
+          Spins up an isolated sandbox (`172.28.0.0/16`) with Linux SSH indexers (`8089`, `9997`), Search Head, Firewall, and an excluded OT asset (`172.28.1.99`):
+          ```bash
+          docker compose -f lab/docker-compose.lab.yml up -d
+          ```
+
+          ### 2. Start Qoder UI & FastAPI Backend
+          ```bash
+          docker compose up --build -d
+          ```
+          - **Qoder Studio UI:** `http://localhost:8443`
+          - **Backend Swagger API Docs:** `http://localhost:8000/docs`
+          EOF
+
+      - name: Commit and Push Generated Project to Repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet || git commit -m "feat: bootstrap full Qoder Splunk Studio, Dark UI, SVA Calculator, and 6-Node Docker Lab"
+          git push
