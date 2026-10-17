@@ -1,0 +1,60 @@
+version: '3.8'
+
+networks:
+  qoder_sandbox:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+services:
+  srv-splunk-idx-01:
+    image: alpine:3.19
+    container_name: srv-splunk-idx-01
+    hostname: srv-splunk-idx-01
+    command: sh -c "apk add --no-cache openssh socat && ssh-keygen -A && /usr/sbin/sshd && socat TCP-LISTEN:8089,fork,reuseaddr SYSTEM:'echo HTTP/1.1 200 OK; echo; echo Splunkd_Mock' & socat TCP-LISTEN:9997,fork,reuseaddr SYSTEM:'echo IDX_READY' & tail -f /dev/null"
+    networks:
+      qoder_sandbox:
+        ipv4_address: 172.28.1.11
+
+  srv-splunk-idx-02:
+    image: alpine:3.19
+    container_name: srv-splunk-idx-02
+    hostname: srv-splunk-idx-02
+    command: sh -c "apk add --no-cache openssh socat && ssh-keygen -A && /usr/sbin/sshd && socat TCP-LISTEN:8089,fork,reuseaddr SYSTEM:'echo HTTP/1.1 200 OK' & socat TCP-LISTEN:9997,fork,reuseaddr SYSTEM:'echo IDX_READY' & tail -f /dev/null"
+    networks:
+      qoder_sandbox:
+        ipv4_address: 172.28.1.12
+
+  srv-splunk-idx-03:
+    image: alpine:3.19
+    container_name: srv-splunk-idx-03
+    hostname: srv-splunk-idx-03
+    command: sh -c "apk add --no-cache openssh socat && ssh-keygen -A && /usr/sbin/sshd && socat TCP-LISTEN:8089,fork,reuseaddr SYSTEM:'echo HTTP/1.1 200 OK' & socat TCP-LISTEN:9997,fork,reuseaddr SYSTEM:'echo IDX_READY' & tail -f /dev/null"
+    networks:
+      qoder_sandbox:
+        ipv4_address: 172.28.1.13
+
+  splunk-sh-01:
+    image: nginx:alpine
+    container_name: splunk-sh-01
+    hostname: splunk-sh-01
+    networks:
+      qoder_sandbox:
+        ipv4_address: 172.28.1.20
+
+  core-firewall-01:
+    image: nginx:alpine
+    container_name: core-firewall-01
+    hostname: core-firewall-01
+    networks:
+      qoder_sandbox:
+        ipv4_address: 172.28.1.1
+
+  restricted-ot-node:
+    image: nginx:alpine
+    container_name: restricted-ot-node
+    hostname: restricted-ot-node
+    networks:
+      qoder_sandbox:
+        ipv4_address: 172.28.1.99

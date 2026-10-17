@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  qoder-backend:
+    build: ./backend
+    container_name: qoder-backend
+    ports:
+      - "8000:8000"
+    networks:
+      - default
+
+  qoder-frontend:
+    build: ./frontend
+    container_name: qoder-frontend
+    ports:
+      - "8443:8443"
+    depends_on:
+      - qoder-backend
