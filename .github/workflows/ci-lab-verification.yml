@@ -51,11 +51,11 @@ jobs:
               container_name: srv-splunk-idx-01
               hostname: srv-splunk-idx-01
               command: >
-                sh -c "apk add --no-cache openssh socat &&
+                sh -c "apk add --no-cache openssh python3 &&
                 ssh-keygen -A &&
                 /usr/sbin/sshd &&
-                socat TCP-LISTEN:8089,fork,reuseaddr EXEC:'/bin/true' &
-                socat TCP-LISTEN:9997,fork,reuseaddr EXEC:'/bin/true' &
+                python3 -m http.server 8089 &
+                python3 -m http.server 9997 &
                 tail -f /dev/null"
               networks:
                 qoder_sandbox:
@@ -66,11 +66,11 @@ jobs:
               container_name: srv-splunk-idx-02
               hostname: srv-splunk-idx-02
               command: >
-                sh -c "apk add --no-cache openssh socat &&
+                sh -c "apk add --no-cache openssh python3 &&
                 ssh-keygen -A &&
                 /usr/sbin/sshd &&
-                socat TCP-LISTEN:8089,fork,reuseaddr EXEC:'/bin/true' &
-                socat TCP-LISTEN:9997,fork,reuseaddr EXEC:'/bin/true' &
+                python3 -m http.server 8089 &
+                python3 -m http.server 9997 &
                 tail -f /dev/null"
               networks:
                 qoder_sandbox:
@@ -81,11 +81,11 @@ jobs:
               container_name: srv-splunk-idx-03
               hostname: srv-splunk-idx-03
               command: >
-                sh -c "apk add --no-cache openssh socat &&
+                sh -c "apk add --no-cache openssh python3 &&
                 ssh-keygen -A &&
                 /usr/sbin/sshd &&
-                socat TCP-LISTEN:8089,fork,reuseaddr EXEC:'/bin/true' &
-                socat TCP-LISTEN:9997,fork,reuseaddr EXEC:'/bin/true' &
+                python3 -m http.server 8089 &
+                python3 -m http.server 9997 &
                 tail -f /dev/null"
               networks:
                 qoder_sandbox:
