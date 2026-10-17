@@ -13,7 +13,7 @@ on:
 
 jobs:
   # -----------------------------------------------------------------
-  # JOB 1: بالا آوردن Lab شش‌نودی + تست زنده اسکنر، امنیت Scope و SVA
+  # JOB 1: بالا آوردن Lab شش‌نودی + تست زنده پورت‌های 22, 8089, 9997
   # -----------------------------------------------------------------
   backend-and-lab-integration:
     name: Spin Up 6-Node Lab & Verify Discovery/Guardrails
@@ -33,10 +33,93 @@ jobs:
           pip install -r backend/requirements.txt
           pip install "pytest>=8.0.0" "httpx<0.28.0"
 
+      - name: Ensure Lab Containers Listen Cleanly on Ports 22, 8089, and 9997
+        run: |
+          cat << 'EOF' > lab/docker-compose.lab.yml
+          version: '3.8'
+
+          networks:
+            qoder_sandbox:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 172.28.0.0/16
+
+          services:
+            srv-splunk-idx-01:
+              image: alpine:3.19
+              container_name: srv-splunk-idx-01
+              hostname: srv-splunk-idx-01
+              command: >
+                sh -c "apk add --no-cache openssh socat &&
+                ssh-keygen -A &&
+                /usr/sbin/sshd &&
+                socat TCP-LISTEN:8089,fork,reuseaddr EXEC:'/bin/true' &
+                socat TCP-LISTEN:9997,fork,reuseaddr EXEC:'/bin/true' &
+                tail -f /dev/null"
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.11
+
+            srv-splunk-idx-02:
+              image: alpine:3.19
+              container_name: srv-splunk-idx-02
+              hostname: srv-splunk-idx-02
+              command: >
+                sh -c "apk add --no-cache openssh socat &&
+                ssh-keygen -A &&
+                /usr/sbin/sshd &&
+                socat TCP-LISTEN:8089,fork,reuseaddr EXEC:'/bin/true' &
+                socat TCP-LISTEN:9997,fork,reuseaddr EXEC:'/bin/true' &
+                tail -f /dev/null"
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.12
+
+            srv-splunk-idx-03:
+              image: alpine:3.19
+              container_name: srv-splunk-idx-03
+              hostname: srv-splunk-idx-03
+              command: >
+                sh -c "apk add --no-cache openssh socat &&
+                ssh-keygen -A &&
+                /usr/sbin/sshd &&
+                socat TCP-LISTEN:8089,fork,reuseaddr EXEC:'/bin/true' &
+                socat TCP-LISTEN:9997,fork,reuseaddr EXEC:'/bin/true' &
+                tail -f /dev/null"
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.13
+
+            splunk-sh-01:
+              image: nginx:alpine
+              container_name: splunk-sh-01
+              hostname: splunk-sh-01
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.20
+
+            core-firewall-01:
+              image: nginx:alpine
+              container_name: core-firewall-01
+              hostname: core-firewall-01
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.1
+
+            restricted-ot-node:
+              image: nginx:alpine
+              container_name: restricted-ot-node
+              hostname: restricted-ot-node
+              networks:
+                qoder_sandbox:
+                  ipv4_address: 172.28.1.99
+          EOF
+
       - name: Start 6-Node Isolated Testing Lab (Docker Compose)
         run: |
           docker compose -f lab/docker-compose.lab.yml up -d
-          echo "⏳ Waiting 8 seconds for SSH and simulated Splunk ports (8089/9997) to initialize..."
+          echo "⏳ Waiting 8 seconds for SSH (22) and Splunk ports (8089/9997) to initialize..."
           sleep 8
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
