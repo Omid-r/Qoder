@@ -12,9 +12,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # -----------------------------------------------------------------
-  # JOB 1: بالا آوردن Lab شش‌نودی + تست زنده پورت‌های 22, 8089, 9997
-  # -----------------------------------------------------------------
   backend-and-lab-integration:
     name: Spin Up 6-Node Lab & Verify Discovery/Guardrails
     runs-on: ubuntu-latest
@@ -119,8 +116,8 @@ jobs:
       - name: Start 6-Node Isolated Testing Lab (Docker Compose)
         run: |
           docker compose -f lab/docker-compose.lab.yml up -d
-          echo "⏳ Waiting 8 seconds for SSH (22) and Splunk ports (8089/9997) to initialize..."
-          sleep 8
+          echo "⏳ Waiting 12 seconds for SSH (22) and Splunk ports (8089/9997) to initialize..."
+          sleep 12
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
       - name: Run Automated Security, Discovery & SVA Sizing Tests
@@ -137,7 +134,6 @@ jobs:
               assert res.json()["status"] == "healthy"
 
           def test_security_guardrail_blocks_internet_scan():
-              """Ensure 0.0.0.0/0 or overly broad scopes are strictly blocked (HTTP 403)."""
               res = client.post("/api/v1/discovery/scan", json={
                   "allowed_cidr": "0.0.0.0/0",
                   "excluded_ips": []
@@ -146,11 +142,6 @@ jobs:
               assert "prohibited" in res.json()["detail"].lower()
 
           def test_live_lab_discovery_and_exclusion_enforcement():
-              """
-              Scan the live Docker Lab network (172.28.1.0/24):
-              1. Verify excluded OT node (172.28.1.99) is NEVER scanned.
-              2. Verify srv-splunk-idx-01 (172.28.1.11) open ports (22, 8089, 9997) are detected.
-              """
               res = client.post("/api/v1/discovery/scan", json={
                   "allowed_cidr": "172.28.1.0/24",
                   "excluded_ips": ["172.28.1.99"],
@@ -161,18 +152,15 @@ jobs:
               
               scanned_ips = [host["ip"] for host in data["results"]]
               
-              # 1. Exclusion Verification
               assert "172.28.1.99" not in scanned_ips, "CRITICAL: Excluded OT asset was scanned!"
               assert "172.28.1.11" in scanned_ips, "Expected lab Indexer 01 to be discovered"
 
-              # 2. Live Port Verification against running Docker containers
               idx01 = next(h for h in data["results"] if h["ip"] == "172.28.1.11")
               assert 22 in idx01["open_ports"], "SSH port 22 should be detected on idx-01"
               assert 8089 in idx01["open_ports"], "Splunk Management port 8089 should be detected on idx-01"
               assert 9997 in idx01["open_ports"], "Splunk Replication/Ingest port 9997 should be detected on idx-01"
 
           def test_sva_architecture_calculator_ha_and_es():
-              """Verify Splunk Validated Architecture (SVA) sizing calculations."""
               res = client.post("/api/v1/architecture/calculate", json={
                   "daily_ingest_gb": 1000,
                   "retention_days": 90,
@@ -194,9 +182,6 @@ jobs:
         run: |
           docker compose -f lab/docker-compose.lab.yml down -v
 
-  # -----------------------------------------------------------------
-  # JOB 2: بررسی TypeScript و Build کامل رابط کاربری (Next.js Dark UI)
-  # -----------------------------------------------------------------
   frontend-ui-verification:
     name: Build & Verify Next.js Dark UI
     runs-on: ubuntu-latest
