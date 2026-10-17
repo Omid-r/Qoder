@@ -31,7 +31,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r backend/requirements.txt
-          pip install pytest httpx
+          pip install "pytest>=8.0.0" "httpx<0.28.0"
 
       - name: Start 6-Node Isolated Testing Lab (Docker Compose)
         run: |
@@ -99,7 +99,6 @@ jobs:
               assert res.status_code == 200
               blueprint = res.json()
               assert blueprint["topology_code"] == "SVA-C3"
-              # 1000 GB/day with ES (200GB/peer cap) => 5 Indexers
               assert blueprint["recommendations"]["indexers"]["count"] == 5
               assert blueprint["recommendations"]["search_heads"]["count"] == 3
               assert "Cluster Manager" in blueprint["recommendations"]["management_nodes"]
