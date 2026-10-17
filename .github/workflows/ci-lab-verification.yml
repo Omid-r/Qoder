@@ -1,0 +1,134 @@
+name: Qoder CI — Lab Integration & Security Tests
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - '.github/workflows/bootstrap-qoder.yml'
+      - 'docs/**'
+      - 'README.md'
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  # -----------------------------------------------------------------
+  # JOB 1: بالا آوردن Lab شش‌نودی + تست زنده اسکنر، امنیت Scope و SVA
+  # -----------------------------------------------------------------
+  backend-and-lab-integration:
+    name: Spin Up 6-Node Lab & Verify Discovery/Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Backend Dependencies & Pytest
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest httpx
+
+      - name: Start 6-Node Isolated Testing Lab (Docker Compose)
+        run: |
+          docker compose -f lab/docker-compose.lab.yml up -d
+          echo "⏳ Waiting 8 seconds for SSH and simulated Splunk ports (8089/9997) to initialize..."
+          sleep 8
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+      - name: Run Automated Security, Discovery & SVA Sizing Tests
+        run: |
+          cat << 'EOF' > backend/test_integration.py
+          from fastapi.testclient import TestClient
+          from app.main import app
+
+          client = TestClient(app)
+
+          def test_health_endpoint():
+              res = client.get("/api/v1/health")
+              assert res.status_code == 200
+              assert res.json()["status"] == "healthy"
+
+          def test_security_guardrail_blocks_internet_scan():
+              """Ensure 0.0.0.0/0 or overly broad scopes are strictly blocked (HTTP 403)."""
+              res = client.post("/api/v1/discovery/scan", json={
+                  "allowed_cidr": "0.0.0.0/0",
+                  "excluded_ips": []
+              })
+              assert res.status_code == 403
+              assert "prohibited" in res.json()["detail"].lower()
+
+          def test_live_lab_discovery_and_exclusion_enforcement():
+              """
+              Scan the live Docker Lab network (172.28.1.0/24):
+              1. Verify excluded OT node (172.28.1.99) is NEVER scanned.
+              2. Verify srv-splunk-idx-01 (172.28.1.11) open ports (22, 8089, 9997) are detected.
+              """
+              res = client.post("/api/v1/discovery/scan", json={
+                  "allowed_cidr": "172.28.1.0/24",
+                  "excluded_ips": ["172.28.1.99"],
+                  "ports": [22, 80, 8089, 9997]
+              })
+              assert res.status_code == 200
+              data = res.json()
+              
+              scanned_ips = [host["ip"] for host in data["results"]]
+              
+              # 1. Exclusion Verification
+              assert "172.28.1.99" not in scanned_ips, "CRITICAL: Excluded OT asset was scanned!"
+              assert "172.28.1.11" in scanned_ips, "Expected lab Indexer 01 to be discovered"
+
+              # 2. Live Port Verification against running Docker containers
+              idx01 = next(h for h in data["results"] if h["ip"] == "172.28.1.11")
+              assert 22 in idx01["open_ports"], "SSH port 22 should be detected on idx-01"
+              assert 8089 in idx01["open_ports"], "Splunk Management port 8089 should be detected on idx-01"
+              assert 9997 in idx01["open_ports"], "Splunk Replication/Ingest port 9997 should be detected on idx-01"
+
+          def test_sva_architecture_calculator_ha_and_es():
+              """Verify Splunk Validated Architecture (SVA) sizing calculations."""
+              res = client.post("/api/v1/architecture/calculate", json={
+                  "daily_ingest_gb": 1000,
+                  "retention_days": 90,
+                  "ha_cluster": True,
+                  "enterprise_security": True
+              })
+              assert res.status_code == 200
+              blueprint = res.json()
+              assert blueprint["topology_code"] == "SVA-C3"
+              # 1000 GB/day with ES (200GB/peer cap) => 5 Indexers
+              assert blueprint["recommendations"]["indexers"]["count"] == 5
+              assert blueprint["recommendations"]["search_heads"]["count"] == 3
+              assert "Cluster Manager" in blueprint["recommendations"]["management_nodes"]
+          EOF
+
+          PYTHONPATH=backend pytest backend/test_integration.py -v
+
+      - name: Tear Down Testing Lab
+        if: always()
+        run: |
+          docker compose -f lab/docker-compose.lab.yml down -v
+
+  # -----------------------------------------------------------------
+  # JOB 2: بررسی TypeScript و Build کامل رابط کاربری (Next.js Dark UI)
+  # -----------------------------------------------------------------
+  frontend-ui-verification:
+    name: Build & Verify Next.js Dark UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Dependencies & Build Production UI
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm run build
